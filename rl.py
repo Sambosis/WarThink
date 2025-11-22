@@ -19,7 +19,18 @@ class PPOSelfPlayAgent:
 
     def __init__(self, env: WarGameEnv, pool_size: int = 5, noise_std: float = 0.1):
         self.env = env
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
+        # Device detection including TPU
+        self.device = 'cpu'
+        if torch.cuda.is_available():
+            self.device = 'cuda'
+        else:
+            try:
+                import torch_xla.core.xla_model as xm
+                self.device = xm.xla_device()
+                print(f"TPU detected: {self.device}")
+            except ImportError:
+                pass
 
         # Policy pool setup
         # We need a base model to initialize the pool
