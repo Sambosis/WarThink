@@ -1,0 +1,39 @@
+
+A module that was compiled using NumPy 1.x cannot be run in
+NumPy 2.0.2 as it may crash. To support both 1.x and 2.x
+versions of NumPy, modules must be compiled with NumPy 2.0.
+Some module may need to rebuild instead e.g. with 'pybind11>=2.12'.
+
+If you are a user of the module, the easiest solution will be to
+downgrade to 'numpy<2' or try to upgrade the affected module.
+We expect that some modules will need time to support NumPy 2.
+
+Traceback (most recent call last):  File "C:\Users\Machine81\WarThink\main.py", line 62, in <module>
+    main(load_path=args.load)
+  File "C:\Users\Machine81\WarThink\main.py", line 39, in main
+    from trainer import Trainer
+  File "C:\Users\Machine81\WarThink\trainer.py", line 9, in <module>
+    from rl import PPOSelfPlayAgent
+  File "C:\Users\Machine81\WarThink\rl.py", line 2, in <module>
+    import torch
+  File "C:\Users\Machine81\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\__init__.py", line 1477, in <module>
+    from .functional import *  # noqa: F403
+  File "C:\Users\Machine81\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\functional.py", line 9, in <module>
+    import torch.nn.functional as F
+  File "C:\Users\Machine81\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\__init__.py", line 1, in <module>
+    from .modules import *  # noqa: F403
+  File "C:\Users\Machine81\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\__init__.py", line 35, in <module>
+    from .transformer import TransformerEncoder, TransformerDecoder, \
+  File "C:\Users\Machine81\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\transformer.py", line 20, in <module>
+    device: torch.device = torch.device(torch._C._get_default_device()),  # torch.device('cpu'),
+C:\Users\Machine81\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\transformer.py:20: UserWarning: Failed to initialize NumPy: _ARRAY_API not found (Triggered internally at ..\torch\csrc\utils\tensor_numpy.cpp:84.)
+  device: torch.device = torch.device(torch._C._get_default_device()),  # torch.device('cpu'),
+Unexpected error during training: Could not infer dtype of numpy.float32
+WarThink: Starting AI self-play PPO training...
+Periodic evaluation renders every 100 episodes (close window/ESC to resume).
+Checkpoints saved every 500 episodes to 'models/'. Ctrl+C to stop.
+
+pygame 2.6.1 (SDL 2.28.4, Python 3.12.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+Starting asymmetric self-play PPO training...
+Device: cpu
