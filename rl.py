@@ -1,12 +1,36 @@
 import numpy as np
 import torch
+import torch.nn as nn
 from stable_baselines3 import PPO
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from copy import deepcopy
 from typing import List, Optional
 
 from stable_baselines3.common.vec_env import DummyVecEnv
 from env import WarGameEnv, SelfPlayWrapper
 
+class CustomCNN(BaseFeaturesExtractor):
+    """
+    Custom CNN for 10x10 grid observations.
+    """
+    def __init__(self, observation_space, features_dim=256):
+        super().__init__(observation_space, features_dim)
+        n_input_channels = observation_space.shape[0]
+        self.cnn = nn.Sequential(
+            nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+        # Compute shape by doing one forward pass
+        with torch.no_grad():
+            n_flatten = self.cnn(torch.as_tensor(observation_space.sample()[None]).float()).shape[1]
+
+        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+
+    def forward(self, observations):
+        return self.linear(self.cnn(observations))
 
 class PPOSelfPlayAgent:
     """
@@ -40,23 +64,29 @@ class PPOSelfPlayAgent:
         # Create the vectorized environment for training
         # The lambda captures self.policy_pool, so the wrapper will have access to the pool
         # even as it gets updated.
-        n_envs = 16
+        n_envs = 4
         self.vec_env = DummyVecEnv([lambda: SelfPlayWrapper(WarGameEnv(), self.policy_pool) for _ in range(n_envs)])
 
         # Base PPO model with standard params
         ppo_params = {
-            'policy': 'MlpPolicy',
+            'policy': 'CnnPolicy',
+
             'env': self.vec_env,
             'verbose': 0,
             'device': self.device,
-            'n_steps': 1024,
+            'n_steps': 2048,
             'batch_size': 512,
             'learning_rate': lambda progress_remaining: 3e-4 * progress_remaining,
             'n_epochs': 5,
             'gamma': 0.99,
-            'gae_lambda': 0.95,
-            'clip_range': 0.2,
-            'ent_coef': 0.01
+            'gae_lambda': 0.9,
+            'clip_range': 0.2,  
+            'ent_coef': 0.03,
+            'policy_kwargs': {
+                'normalize_images': False,
+                'features_extractor_class': CustomCNN,
+                'features_extractor_kwargs': {'features_dim': 256}
+            }
         }
         
         base_model = PPO(**ppo_params)

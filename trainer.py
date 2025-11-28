@@ -89,7 +89,7 @@ class Trainer:
 
         if winner in [1, 2]:
             # Annihilation wins get a larger bonus
-            bonus = 50.0 if win_condition == 'annihilation' else 20.0
+            bonus = 200.0 if win_condition == 'annihilation' else 5.0
             if dashboard and win_condition == 'annihilation':
                  # Only log annihilation to reduce spam, or maybe just rare events
                  pass

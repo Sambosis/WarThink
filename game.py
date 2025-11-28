@@ -117,7 +117,14 @@ def generate_obs(state: GameState) -> np.ndarray:
     # Ch 3: Enemy Unit HP
     # Ch 4: Valid Move/Attack Mask (for Self)
     
-    obs = np.zeros((10, 10, 5), dtype=np.float32)
+    # Transpose to (5, 10, 10) for CNN
+    # Ch 0: Self Unit Type
+    # Ch 1: Self Unit HP
+    # Ch 2: Enemy Unit Type
+    # Ch 3: Enemy Unit HP
+    # Ch 4: Valid Move/Attack Mask
+    
+    obs = np.zeros((5, 10, 10), dtype=np.float32)
     type_map = {'warrior': 1.0, 'archer': 2.0, 'commander': 3.0}
 
     current_units = state.get_current_units()
@@ -127,15 +134,15 @@ def generate_obs(state: GameState) -> np.ndarray:
     for unit in current_units:
         if unit.alive:
             y, x = unit.pos
-            obs[y, x, 0] = type_map[unit.type_] / 3.0
-            obs[y, x, 1] = unit.hp / unit.max_hp
+            obs[0, y, x] = type_map[unit.type_] / 3.0
+            obs[1, y, x] = unit.hp / unit.max_hp
 
     # Enemy units -> Ch 2/3
     for unit in enemy_units:
         if unit.alive:
             y, x = unit.pos
-            obs[y, x, 2] = type_map[unit.type_] / 3.0
-            obs[y, x, 3] = unit.hp / unit.max_hp
+            obs[2, y, x] = type_map[unit.type_] / 3.0
+            obs[3, y, x] = unit.hp / unit.max_hp
 
     # Valid moves mask ch4
     deltas = [(-1, 0), (1, 0), (0, 1), (0, -1)]  # N S E W
@@ -162,8 +169,10 @@ def generate_obs(state: GameState) -> np.ndarray:
                 nx = max(0, min(9, x + dx * step))
                 mask_grid[ny, nx] = 1.0
 
-    obs[:, :, 4] = mask_grid
+    obs[4, :, :] = mask_grid
 
+    # Note: state.grid is used for rendering, which might expect (10, 10, 5)
+    # But for now let's keep it consistent with obs
     state.grid = obs.copy()
     return obs
 

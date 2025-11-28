@@ -7,7 +7,7 @@ from typing import Tuple, Dict, Any
 class WarGameEnv(gym.Env):
     """
     Gymnasium-compatible environment for the WarGame turn-based strategy game.
-    Wraps GameState logic, provides 10x10x5 observation tensor, processes MultiDiscrete actions
+    Wraps GameState logic, provides 5x10x10 observation tensor, processes MultiDiscrete actions
     for 5 units (stay + 4 moves + 4 attacks), computes dense rewards for the acting player,
     alternates turns, handles termination. Headless; rendering in separate Renderer.
     """
@@ -15,8 +15,9 @@ class WarGameEnv(gym.Env):
 
     def __init__(self):
         super().__init__()
+        # Updated to (5, 10, 10) for CNN
         self.observation_space = gym.spaces.Box(
-            low=0.0, high=3.0, shape=(10, 10, 5), dtype=np.float32
+            low=0.0, high=3.0, shape=(5, 10, 10), dtype=np.float32
         )
         self.action_space = gym.spaces.MultiDiscrete([9] * 5)
         self.state = GameState()
@@ -73,18 +74,29 @@ class WarGameEnv(gym.Env):
 
         # Resolve actions and calculate damage dealt to enemy
         prev_enemy_hp = sum(u.hp for u in enemy_units)
+        prev_enemy_count = sum(1 for u in enemy_units if u.alive)
         resolve_actions(self.state, actions)
         post_enemy_hp = sum(u.hp for u in enemy_units)
+        post_enemy_count = sum(1 for u in enemy_units if u.alive)
         damage_to_enemy = prev_enemy_hp - post_enemy_hp
+        killed_units = prev_enemy_count - post_enemy_count
 
         # Store damage dealt for the other player's next turn
         if acting_player == 1:
             self.damage_taken_by_p2 = damage_to_enemy
         else:
             self.damage_taken_by_p1 = damage_to_enemy
-
+        ######################################################
         # Dense reward for acting player (symmetric damage reward/penalty)
-        reward = (damage_to_enemy * 1.0) - (damage_to_own * 0.5) - 0.1
+        reward = (damage_to_enemy * 1.0) - (damage_to_own * 1.0) + (killed_units * 20.0) - 0.05
+        ######################################################
+
+
+        # Increment turn count
+        self.state.turn_count += 1
+
+        # Switch current player
+        self.state.current_player = 2 if self.state.current_player == 1 else 1
 
         # Next observation
         obs = generate_obs(self.state)
@@ -100,7 +112,7 @@ class WarGameEnv(gym.Env):
             'reward_components': {
                 'damage_enemy': damage_to_enemy,
                 'damage_own': damage_to_own,
-                'step_penalty': -0.1
+                'step_penalty': -0.25
             }
         }
 
