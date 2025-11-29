@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from stable_baselines3.common.vec_env import DummyVecEnv
 from env import WarGameEnv, SelfPlayWrapper
+from config import cfg
 
 class CustomCNN(BaseFeaturesExtractor):
     """
@@ -41,7 +42,7 @@ class PPOSelfPlayAgent:
     Evolves every 100 episodes: top-2 selected, others mutated, best -> pool[0]
     """
 
-    def __init__(self, env: WarGameEnv, pool_size: int = 5, noise_std: float = 0.1):
+    def __init__(self, env: WarGameEnv, pool_size: int = cfg.rl.pool_size, noise_std: float = cfg.rl.noise_std):
         self.env = env
         
         # Device detection including TPU
@@ -64,30 +65,22 @@ class PPOSelfPlayAgent:
         # Create the vectorized environment for training
         # The lambda captures self.policy_pool, so the wrapper will have access to the pool
         # even as it gets updated.
-        n_envs = 4
+        n_envs = cfg.rl.n_envs
         self.vec_env = DummyVecEnv([lambda: SelfPlayWrapper(WarGameEnv(), self.policy_pool) for _ in range(n_envs)])
 
         # Base PPO model with standard params
-        ppo_params = {
+        ppo_params = cfg.rl.ppo_params
+        ppo_params.update({
             'policy': 'CnnPolicy',
-
             'env': self.vec_env,
             'verbose': 0,
             'device': self.device,
-            'n_steps': 2048,
-            'batch_size': 512,
-            'learning_rate': lambda progress_remaining: 3e-4 * progress_remaining,
-            'n_epochs': 5,
-            'gamma': 0.99,
-            'gae_lambda': 0.9,
-            'clip_range': 0.2,  
-            'ent_coef': 0.03,
             'policy_kwargs': {
                 'normalize_images': False,
                 'features_extractor_class': CustomCNN,
-                'features_extractor_kwargs': {'features_dim': 256}
+                'features_extractor_kwargs': {'features_dim': cfg.rl.features_dim}
             }
-        }
+        })
         
         base_model = PPO(**ppo_params)
         self.policy_pool.append(base_model)
@@ -204,11 +197,20 @@ class PPOSelfPlayAgent:
         scores_str = ", ".join([f"{s:.3f}" for s in top_scores])
         print(f"Top performers: {top_indices} (scores: {scores_str})")
         
-        # Mutate non-elites
-        for i in range(len(self.policy_pool)):
-            if i not in top_indices:
-                self.mutate_policy(self.policy_pool[i])
-                # print(f"Mutated policy {i}")
+        # Mutate only the worst performer
+        worst_idx = np.argmin(normalized_performances)
+        # Ensure we don't mutate the best one if for some reason it's also the worst (e.g. pool size 1, or all equal)
+        # But pool size is usually > 1.
+        if worst_idx not in top_indices:
+             self.mutate_policy(self.policy_pool[worst_idx])
+             # print(f"Mutated worst policy {worst_idx} (score: {normalized_performances[worst_idx]:.3f})")
+        else:
+             # If worst is in top (e.g. small pool), mutate a random non-top
+             non_top = [i for i in range(len(self.policy_pool)) if i not in top_indices]
+             if non_top:
+                 idx = np.random.choice(non_top)
+                 self.mutate_policy(self.policy_pool[idx])
+                 # print(f"Mutated policy {idx}")
         
         # Promote best to main
         best_idx = int(top_indices[-1])

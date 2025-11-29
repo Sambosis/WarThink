@@ -2,6 +2,7 @@ import gymnasium as gym
 import numpy as np
 from game import GameState, generate_obs, resolve_actions
 from typing import Tuple, Dict, Any
+from config import cfg
 
 
 class WarGameEnv(gym.Env):
@@ -11,15 +12,15 @@ class WarGameEnv(gym.Env):
     for 5 units (stay + 4 moves + 4 attacks), computes dense rewards for the acting player,
     alternates turns, handles termination. Headless; rendering in separate Renderer.
     """
-    metadata = {'render_modes': ['human'], 'render_fps': 10}
+    metadata = {'render_modes': ['human'], 'render_fps': cfg.env.render_fps}
 
     def __init__(self):
         super().__init__()
         # Updated to (5, 10, 10) for CNN
         self.observation_space = gym.spaces.Box(
-            low=0.0, high=3.0, shape=(5, 10, 10), dtype=np.float32
+            low=0.0, high=3.0, shape=(cfg.env.n_units, cfg.env.grid_size, cfg.env.grid_size), dtype=np.float32
         )
-        self.action_space = gym.spaces.MultiDiscrete([9] * 5)
+        self.action_space = gym.spaces.MultiDiscrete([9] * cfg.env.n_units)
         self.state = GameState()
         self.current_player = 1
         self.damage_taken_by_p1 = 0
@@ -58,8 +59,8 @@ class WarGameEnv(gym.Env):
         Returns:
             Tuple of (next_obs, reward, terminated, truncated, info).
         """
-        if actions.shape != (5,):
-            raise ValueError(f"Expected actions shape (5,), got {actions.shape}")
+        if actions.shape != (cfg.env.n_units,):
+            raise ValueError(f"Expected actions shape ({cfg.env.n_units},), got {actions.shape}")
 
         acting_player = self.state.current_player
         own_units = self.state.get_current_units()
@@ -88,9 +89,8 @@ class WarGameEnv(gym.Env):
             self.damage_taken_by_p1 = damage_to_enemy
         ######################################################
         # Dense reward for acting player (symmetric damage reward/penalty)
-        reward = (damage_to_enemy * 1.0) - (damage_to_own * 1.0) + (killed_units * 20.0) - 0.05
+        reward = (damage_to_enemy * cfg.env.damage_scale) - (damage_to_own * cfg.env.damage_scale) + (killed_units * cfg.env.kill_bonus) + cfg.env.step_penalty
         ######################################################
-
 
         # Increment turn count
         self.state.turn_count += 1
@@ -112,7 +112,7 @@ class WarGameEnv(gym.Env):
             'reward_components': {
                 'damage_enemy': damage_to_enemy,
                 'damage_own': damage_to_own,
-                'step_penalty': -0.25
+                'step_penalty': cfg.env.step_penalty
             }
         }
 

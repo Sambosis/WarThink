@@ -8,6 +8,7 @@ dependencies = [
     "gymnasium>=1.2.2",
     "imageio[ffmpeg]>=2.37.2",
     "numpy>=2.3.5",
+    "pyautogui>=0.9.54",
     "pygame>=2.6.1",
     "rich>=14.2.0",
     "shimmy>=2.0.0",

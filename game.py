@@ -93,7 +93,7 @@ class GameState:
             self.win_condition = 'annihilation'
             return True
         
-        if self.turn_count >= 200:
+        if self.turn_count >= 500:
             p1_count = len(p1_alive_units)
             p2_count = len(p2_alive_units)
             if p1_count > p2_count:

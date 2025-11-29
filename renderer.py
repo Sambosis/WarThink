@@ -1,4 +1,6 @@
 import pygame
+import math
+import random
 from game import GameState, Unit
 from typing import Tuple, List, Dict, Optional
 
@@ -14,6 +16,7 @@ class Renderer:
         self.iso_offset_x = width // 2
         self.iso_offset_y = height // 2 - 100
         self.animations: List[Dict] = []
+        self.last_alive_units = set()
         self.fullscreen = False
         self._update_offsets_and_tile()
 
@@ -52,50 +55,92 @@ class Renderer:
                 pygame.draw.polygon(self.screen, color, points)
                 pygame.draw.polygon(self.screen, (0, 0, 0), points, 1)
 
-    def draw_unit_pos(self, x: float, y: float, unit: Unit):
+    def draw_unit_pos(self, x: float, y: float, unit: Unit, alpha: int = 255, scale: float = 1.0):
         color = (0, 100, 255) if unit.player == 1 else (255, 0, 100)
-        size = self.tile_size // 2
+        size = int((self.tile_size // 2) * scale)
+
+        # Create a temporary surface for alpha blending if needed
+        if alpha < 255:
+            surf = pygame.Surface((size * 4, size * 4), pygame.SRCALPHA)
+            offset_x, offset_y = size * 2, size * 2
+        else:
+            surf = self.screen
+            offset_x, offset_y = x, y
 
         # Glow
-        glow_surf = pygame.Surface((size * 2 + 8, size * 2 + 8), pygame.SRCALPHA)
-        pygame.draw.circle(glow_surf, (*color, 80), (size + 4, size + 4), size + 4)
-        self.screen.blit(glow_surf, (x - size - 4, y - size - 4))
+        if alpha == 255: # Only draw glow for alive units
+            glow_surf = pygame.Surface((size * 2 + 8, size * 2 + 8), pygame.SRCALPHA)
+            pygame.draw.circle(glow_surf, (*color, 80), (size + 4, size + 4), size + 4)
+            if alpha < 255:
+                surf.blit(glow_surf, (offset_x - size - 4, offset_y - size - 4))
+            else:
+                self.screen.blit(glow_surf, (x - size - 4, y - size - 4))
 
         # Shadow
-        shadow_surf = pygame.Surface((size + 10, size // 2 + 8), pygame.SRCALPHA)
-        pygame.draw.ellipse(shadow_surf, (0, 0, 0, 120), (3, 3, size + 2, size // 2))
-        self.screen.blit(shadow_surf, (x - size // 2 + 4, y - size // 4 + 4))
+        if alpha == 255:
+            shadow_surf = pygame.Surface((size + 10, size // 2 + 8), pygame.SRCALPHA)
+            pygame.draw.ellipse(shadow_surf, (0, 0, 0, 120), (3, 3, size + 2, size // 2))
+            if alpha < 255:
+                surf.blit(shadow_surf, (offset_x - size // 2 + 4, offset_y - size // 4 + 4))
+            else:
+                self.screen.blit(shadow_surf, (x - size // 2 + 4, y - size // 4 + 4))
 
         # Body
         points = [
-            (x, y - size // 2),
-            (x + size // 2, y),
-            (x, y + size // 2),
-            (x - size // 2, y)
+            (offset_x, offset_y - size // 2),
+            (offset_x + size // 2, offset_y),
+            (offset_x, offset_y + size // 2),
+            (offset_x - size // 2, offset_y)
         ]
-        pygame.draw.polygon(self.screen, color, points)
-        pygame.draw.polygon(self.screen, (255, 255, 255), points, 2)
+        
+        body_color = (*color, alpha) if alpha < 255 else color
+        # Note: pygame.draw.polygon doesn't support alpha directly on main screen, 
+        # but does on SRCALPHA surface.
+        
+        pygame.draw.polygon(surf, body_color, points)
+        pygame.draw.polygon(surf, (255, 255, 255, alpha) if alpha < 255 else (255, 255, 255), points, 2)
 
         # Type icon
-        type_color = (255, 215, 0) if unit.type_ == 'commander' else (255, 255, 255)
-        pygame.draw.circle(self.screen, type_color, (int(x), int(y)), 5)
+        if unit.type_ == 'commander':
+            # Gold Circle
+            pygame.draw.circle(surf, (255, 215, 0, alpha) if alpha < 255 else (255, 215, 0), (int(offset_x), int(offset_y)), 6)
+            pygame.draw.circle(surf, (0, 0, 0, alpha) if alpha < 255 else (0, 0, 0), (int(offset_x), int(offset_y)), 6, 1)
+        elif unit.type_ == 'warrior':
+            # Silver Square
+            rect_size = 10
+            pygame.draw.rect(surf, (192, 192, 192, alpha) if alpha < 255 else (192, 192, 192), (offset_x - rect_size//2, offset_y - rect_size//2, rect_size, rect_size))
+            pygame.draw.rect(surf, (0, 0, 0, alpha) if alpha < 255 else (0, 0, 0), (offset_x - rect_size//2, offset_y - rect_size//2, rect_size, rect_size), 1)
+        elif unit.type_ == 'archer':
+            # Bronze Triangle
+            pts = [
+                (offset_x, offset_y - 6),
+                (offset_x - 5, offset_y + 4),
+                (offset_x + 5, offset_y + 4)
+            ]
+            pygame.draw.polygon(surf, (205, 127, 50, alpha) if alpha < 255 else (205, 127, 50), pts)
+            pygame.draw.polygon(surf, (0, 0, 0, alpha) if alpha < 255 else (0, 0, 0), pts, 1)
 
-        # HP bar
-        bar_width = 24
-        bar_height = 4
-        hp_ratio = unit.hp / unit.max_hp
-        bar_x = x - bar_width // 2
-        bar_y = y - size // 2 - 10
-        pygame.draw.rect(self.screen, (200, 0, 0), (bar_x, bar_y, bar_width, bar_height))
-        pygame.draw.rect(self.screen, (0, 200, 0), (bar_x, bar_y, int(bar_width * hp_ratio), bar_height))
-        pygame.draw.rect(self.screen, (255, 255, 255), (bar_x, bar_y, bar_width, bar_height), 1)
+        # HP bar (only if alive/full alpha)
+        if alpha == 255:
+            bar_width = 24
+            bar_height = 4
+            hp_ratio = unit.hp / unit.max_hp
+            bar_x = x - bar_width // 2
+            bar_y = y - size // 2 - 10
+            pygame.draw.rect(self.screen, (200, 0, 0), (bar_x, bar_y, bar_width, bar_height))
+            pygame.draw.rect(self.screen, (0, 200, 0), (bar_x, bar_y, int(bar_width * hp_ratio), bar_height))
+            pygame.draw.rect(self.screen, (255, 255, 255), (bar_x, bar_y, bar_width, bar_height), 1)
+
+        if alpha < 255:
+            self.screen.blit(surf, (x - size * 2, y - size * 2))
 
     def draw_unit(self, unit: Unit):
         x, y = self.iso_to_screen(unit.pos)
-        self.draw_unit_pos(x, y, unit)
+        self.draw_unit_pos(x, y,  unit)
 
     def animate_move(self, unit: Unit, target_pos: Tuple[int, int], duration: float = 0.5):
         self.animations.append({
+            'type': 'move',
             'unit': unit,
             'start': self.iso_to_screen(unit.pos),
             'end': self.iso_to_screen(target_pos),
@@ -109,18 +154,112 @@ class Renderer:
             if anim['progress'] >= 1.0:
                 self.animations.remove(anim)
                 continue
-            prog = 1.0 - (1.0 - anim['progress']) ** 2
-            cx = anim['start'][0] + (anim['end'][0] - anim['start'][0]) * prog
-            cy = anim['start'][1] + (anim['end'][1] - anim['start'][1]) * prog
-            self.draw_unit_pos(cx, cy, anim['unit'])
+            
+            if anim['type'] == 'move':
+                prog = 1.0 - (1.0 - anim['progress']) ** 2
+                cx = anim['start'][0] + (anim['end'][0] - anim['start'][0]) * prog
+                cy = anim['start'][1] + (anim['end'][1] - anim['start'][1]) * prog
+                self.draw_unit_pos(cx, cy, anim['unit'])
+            elif anim['type'] == 'death':
+                # Dramatic explosion effect
+                prog = anim['progress']
+                x, y = anim['pos']
+                
+                # Stage 1: Flash (0-0.25)
+                if prog < 0.25:
+                    flash_alpha = int(255 * (1.0 - prog / 0.25))
+                    flash_surf = pygame.Surface((self.tile_size * 2, self.tile_size * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(flash_surf, (255, 255, 255, flash_alpha), 
+                                     (self.tile_size, self.tile_size), self.tile_size)
+                    self.screen.blit(flash_surf, (x - self.tile_size, y - self.tile_size))
+                
+                # Stage 2: Shrink and darken unit (0-0.75)
+                if prog < 0.75:
+                    # Rapid shrink
+                    scale = 1.0 - (prog / 0.75) * 0.9  # Shrink to 10% size
+                    alpha = int(255 * (1.0 - prog / 0.75))
+                    
+                    # Draw shrinking unit
+                    size = int((self.tile_size // 2) * scale)
+                    
+                    surf = pygame.Surface((size * 4, size * 4), pygame.SRCALPHA)
+                    offset_x, offset_y = size * 2, size * 2
+                    
+                    # Body with color shift to red
+                    unit_copy = anim['unit']
+                    base_color = (0, 100, 255) if unit_copy.player == 1 else (255, 0, 100)
+                    color_shift = prog / 0.75
+                    shifted_color = (
+                        min(255, int(base_color[0] + (255 - base_color[0]) * color_shift)),
+                        int(base_color[1] * (1 - color_shift * 0.8)),
+                        int(base_color[2] * (1 - color_shift * 0.8))
+                    )
+                    
+                    # Diamond
+                    points = [
+                        (offset_x, offset_y - size // 2),
+                        (offset_x + size // 2, offset_y),
+                        (offset_x, offset_y + size // 2),
+                        (offset_x - size // 2, offset_y)
+                    ]
+                    
+                    pygame.draw.polygon(surf, (*shifted_color, alpha), points)
+                    self.screen.blit(surf, (x - size * 2, y - size * 2))
+                
+                # Stage 3: Particle explosion (0.1-1.0)
+                if 'particles' not in anim:
+                    # Initialize particles
+                    anim['particles'] = []
+                    num_particles = 10
+                    for i in range(num_particles):
+                        angle = (i / num_particles) * 2 * math.pi
+                        speed = random.uniform(80, 150)
+                        anim['particles'].append({
+                            'angle': angle,
+                            'speed': speed,
+                            'size': random.randint(3, 7),
+                            'color': (255, random.randint(100, 200), 0) if random.random() > 0.5 else (200, 200, 200)
+                        })
+                
+                # Draw particles
+                if prog > 0.1:
+                    particle_prog = (prog - 0.1) / 0.9
+                    for particle in anim['particles']:
+                        dist = particle['speed'] * particle_prog
+                        px = x + math.cos(particle['angle']) * dist
+                        py = y + math.sin(particle['angle']) * dist
+                        
+                        # Fade out particles
+                        p_alpha = int(255 * (1.0 - particle_prog))
+                        p_surf = pygame.Surface((particle['size'] * 2, particle['size'] * 2), pygame.SRCALPHA)
+                        pygame.draw.circle(p_surf, (*particle['color'], p_alpha), 
+                                         (particle['size'], particle['size']), particle['size'])
+                        self.screen.blit(p_surf, (px - particle['size'], py - particle['size']))
 
     def render(self, state: GameState):
         self.draw_grid()
+        
+        # Check for deaths
+        all_units = state.p1_units + state.p2_units
+        for unit in all_units:
+            if unit in self.last_alive_units and not unit.alive:
+                # Unit just died
+                x, y = self.iso_to_screen(unit.pos)
+                self.animations.append({
+                    'type': 'death',
+                    'unit': unit,
+                    'pos': (x, y),
+                    'progress': 0.0,
+                    'duration': 0.4
+                })
+        
+        self.last_alive_units = {u for u in all_units if u.alive}
+        
         self.update_animations(1 / 60.0)
         for units in [state.p1_units, state.p2_units]:
             for unit in units:
                 if unit.alive:
-                    animating = any(a['unit'] == unit for a in self.animations)
+                    animating = any(a['unit'] == unit and a.get('type') == 'move' for a in self.animations)
                     if not animating:
                         self.draw_unit(unit)
         # UI

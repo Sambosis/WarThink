@@ -11,6 +11,7 @@ from renderer import Renderer
 from recorder import record_pygame
 from ui import TrainingDashboard
 from rich.live import Live
+from config import cfg
 
 class Trainer:
     def __init__(self, load_model_path: Optional[str] = None):
@@ -22,6 +23,8 @@ class Trainer:
         self.episode_rewards = []
         self.episode_details = [] # List of dicts: {winner, condition, steps}
         self.episode_winners = []
+        self.p1_total_annihilations = 0
+        self.p2_total_annihilations = 0
         os.makedirs('models', exist_ok=True)
 
         if load_model_path:
@@ -37,7 +40,7 @@ class Trainer:
             else:
                 print(f"Warning: Model path not found, starting new training: {load_model_path}")
 
-    def get_recent_stats(self, window: int = 100):
+    def get_recent_stats(self, window: int = cfg.trainer.stats_window):
         if len(self.episode_rewards) < window:
             return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
             
@@ -89,7 +92,7 @@ class Trainer:
 
         if winner in [1, 2]:
             # Annihilation wins get a larger bonus
-            bonus = 200.0 if win_condition == 'annihilation' else 5.0
+            bonus = cfg.env.annihilation_bonus if win_condition == 'annihilation' else cfg.env.attrition_bonus
             if dashboard and win_condition == 'annihilation':
                  # Only log annihilation to reduce spam, or maybe just rare events
                  pass
@@ -97,9 +100,17 @@ class Trainer:
             if winner == 1:
                 p1_total_reward += bonus
                 p2_total_reward -= bonus
+                if win_condition == 'annihilation':
+                    self.p1_total_annihilations += 1
             else: # winner == 2
                 p2_total_reward += bonus
                 p1_total_reward -= bonus
+                if win_condition == 'annihilation':
+                    self.p2_total_annihilations += 1
+        elif winner == 0:
+            # Apply draw penalty to both players
+            p1_total_reward += cfg.env.draw_penalty
+            p2_total_reward += cfg.env.draw_penalty
         
         # Log the final total reward (sum of dense + terminal rewards)
         final_total_reward = p1_total_reward + p2_total_reward
@@ -124,7 +135,7 @@ class Trainer:
         done = False
         
         # Restore video recording
-        with record_pygame(f"videos/WarWatch_{self.episode_count}.mp4", fps=10):
+        with record_pygame(f"videos/WarWatch_{self.episode_count}.mp4", fps=cfg.trainer.eval_fps):
             while not done:
                 if not self.renderer.handle_events():
                     if dashboard: dashboard.log_event("Eval interrupted.", style="red")
@@ -136,7 +147,7 @@ class Trainer:
                 self.renderer.render(self.env.state)
                 
                 # Just get basic stats for renderer
-                stats = self.get_recent_stats(100)
+                stats = self.get_recent_stats(cfg.trainer.stats_window)
                 avg_reward, win_rate = stats[0], stats[1]
                 
                 self.renderer.draw_stats(
@@ -163,7 +174,7 @@ class Trainer:
                     self.episode_count += 1
                     
                     # Update stats every episode
-                    stats = self.get_recent_stats(100)
+                    stats = self.get_recent_stats(cfg.trainer.stats_window)
                     # Unpack all stats
                     (avg_reward, p1_win_rate, p1_annihil, p1_attrit, 
                      p2_annihil, p2_attrit, draw_rate, avg_steps) = stats
@@ -171,16 +182,17 @@ class Trainer:
                     dashboard.update_stats(
                         self.episode_count, avg_reward, p1_win_rate,
                         p1_annihil, p1_attrit, p2_annihil, p2_attrit,
-                        draw_rate, avg_steps, self.total_steps
+                        draw_rate, avg_steps, self.total_steps,
+                        self.p1_total_annihilations, self.p2_total_annihilations
                     )
                     
-                    if self.episode_count % 10 == 0:
+                    if self.episode_count % cfg.trainer.quick_learn_freq == 0:
                         dashboard.set_status("Quick learning...")
                         dashboard.log_event(f"Quick learn at ep {self.episode_count}...", style="dim")
                         live.update(dashboard.get_renderable())
-                        self.agent.learn(total_timesteps=2048)
+                        self.agent.learn(total_timesteps=cfg.trainer.quick_learn_steps)
                         
-                    if self.episode_count % 100 == 0:
+                    if self.episode_count % cfg.trainer.intensive_learn_freq == 0:
                         dashboard.log_event(f"--- Episode {self.episode_count} ---", style="bold")
                         
                         dashboard.set_status("Evolving pool...")
@@ -191,14 +203,14 @@ class Trainer:
                         dashboard.set_status("Intensive learning...")
                         dashboard.log_event("Performing intensive PPO learning...", style="magenta")
                         live.update(dashboard.get_renderable())
-                        self.agent.learn(total_timesteps=20000)
+                        self.agent.learn(total_timesteps=cfg.trainer.intensive_learn_steps)
                         
                         dashboard.set_status("Evaluating...")
                         dashboard.log_event("Rendering evaluation game...", style="blue")
                         live.update(dashboard.get_renderable())
                         self.eval_render(dashboard=dashboard)
                         
-                    if self.episode_count % 500 == 0:
+                    if self.episode_count % cfg.trainer.checkpoint_freq == 0:
                         checkpoint_path = f"models/checkpoint_{self.episode_count}.zip"
                         self.agent.save(checkpoint_path)
                         dashboard.log_event(f"Checkpoint saved: {checkpoint_path}", style="bold green")
