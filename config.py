@@ -4,35 +4,36 @@ from typing import Dict, Any
 
 @dataclass
 class EnvConfig:
-    render_fps: int = 20
-    grid_size: int = 10
+    render_fps: int = 60
+    grid_size: int = 8
     n_units: int = 5
+    max_turns: int = 600
     
     # Rewards
     damage_scale: float = 1.0
-    kill_bonus: float = 30.0
-    step_penalty: float = -0.1
+    kill_bonus: float = 100.0
+    step_penalty: float = -3.0
     
     # Terminal Bonuses (handled in Trainer usually, but good to have here)
-    annihilation_bonus: float = 200.0
+    annihilation_bonus: float = 1000.0
     attrition_bonus: float = 10.0
-    draw_penalty: float = -20.0
+    draw_penalty: float = -50.0
 
 @dataclass
 class RLConfig:
     pool_size: int = 4
-    noise_std: float = 0.1
+    noise_std: float = 0.05
     n_envs: int = 4
     
     # PPO Hyperparameters
     n_steps: int = 2048
-    batch_size: int = 512
-    learning_rate: float = 3e-4
-    n_epochs: int = 4
-    gamma: float = 0.99
-    gae_lambda: float = 0.9
+    batch_size: int = 4096
+    learning_rate: float = 2.5e-4
+    n_epochs: int = 10
+    gamma: float = 0.995
+    gae_lambda: float = 0.995
     clip_range: float = 0.2
-    ent_coef: float = 0.03
+    ent_coef: float = 0.02
     features_dim: int = 256
     
     @property
@@ -53,14 +54,14 @@ class TrainerConfig:
     stats_window: int = 100
     
     # Training Loop
-    quick_learn_steps: int = 2048
-    intensive_learn_steps: int = 20000
+    quick_learn_steps: int = 8192
+    intensive_learn_steps: int = 40960
     
-    quick_learn_freq: int = 20
-    intensive_learn_freq: int = 100
+    quick_learn_freq: int = 50
+    intensive_learn_freq: int = 500
     checkpoint_freq: int = 500
     
-    eval_fps: int = 30
+    eval_fps: int = 60
 
 @dataclass
 class Config:

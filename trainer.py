@@ -4,6 +4,8 @@ import pygame
 import numpy as np
 from typing import List, Optional, Tuple
 from rich import print as rr
+import csv
+import datetime
 
 from env import WarGameEnv
 from rl import PPOSelfPlayAgent
@@ -26,6 +28,13 @@ class Trainer:
         self.p1_total_annihilations = 0
         self.p2_total_annihilations = 0
         os.makedirs('models', exist_ok=True)
+        
+        # Initialize CSV logging
+        self.csv_log_path = 'training_log.csv'
+        if not os.path.exists(self.csv_log_path):
+            with open(self.csv_log_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Episode', 'AvgReward', 'P1_WinRate', 'P1_Annihil', 'P1_Attrit', 'P2_Annihil', 'P2_Attrit', 'DrawRate', 'AvgSteps', 'Timestamp'])
 
         if load_model_path:
             if os.path.exists(load_model_path):
@@ -96,15 +105,15 @@ class Trainer:
             if dashboard and win_condition == 'annihilation':
                  # Only log annihilation to reduce spam, or maybe just rare events
                  pass
-            
+            # temporarily disabled annihilation negative rewards
             if winner == 1:
                 p1_total_reward += bonus
-                p2_total_reward -= bonus
+                # p2_total_reward -= bonus
                 if win_condition == 'annihilation':
                     self.p1_total_annihilations += 1
             else: # winner == 2
                 p2_total_reward += bonus
-                p1_total_reward -= bonus
+                # p1_total_reward -= bonus
                 if win_condition == 'annihilation':
                     self.p2_total_annihilations += 1
         elif winner == 0:
@@ -125,10 +134,10 @@ class Trainer:
         self.agent.update_pool([p1_total_reward, p2_total_reward])
 
     def eval_render(self, dashboard: Optional[TrainingDashboard] = None):
-        if dashboard:
-            dashboard.log_event("Eval render started...", style="blue")
-        else:
-            print("Starting evaluation render...")
+        # if dashboard:
+        #     # dashboard.log_event("Eval render started...", style="blue")
+        # else:
+        #     print("Starting evaluation render...")
             
         obs, _ = self.env.reset()
         self.agent.start_episode()
@@ -185,10 +194,27 @@ class Trainer:
                         draw_rate, avg_steps, self.total_steps,
                         self.p1_total_annihilations, self.p2_total_annihilations
                     )
+
+                    # CSV Logging every 100 episodes
+                    if self.episode_count % 100 == 0:
+                        with open(self.csv_log_path, 'a', newline='') as f:
+                            writer = csv.writer(f)
+                            writer.writerow([
+                                self.episode_count, 
+                                f"{avg_reward:.2f}", 
+                                f"{p1_win_rate:.2f}",
+                                f"{p1_annihil:.2f}",
+                                f"{p1_attrit:.2f}",
+                                f"{p2_annihil:.2f}",
+                                f"{p2_attrit:.2f}",
+                                f"{draw_rate:.2f}",
+                                f"{avg_steps:.1f}",
+                                datetime.datetime.now().isoformat()
+                            ])
                     
                     if self.episode_count % cfg.trainer.quick_learn_freq == 0:
                         dashboard.set_status("Quick learning...")
-                        dashboard.log_event(f"Quick learn at ep {self.episode_count}...", style="dim")
+                        # dashboard.log_event(f"Quick learn at ep {self.episode_count}...", style="dim")
                         live.update(dashboard.get_renderable())
                         self.agent.learn(total_timesteps=cfg.trainer.quick_learn_steps)
                         
@@ -196,9 +222,9 @@ class Trainer:
                         dashboard.log_event(f"--- Episode {self.episode_count} ---", style="bold")
                         
                         dashboard.set_status("Evolving pool...")
-                        dashboard.log_event("Evolving policy pool...", style="yellow")
+                        # dashboard.log_event("Evolving policy pool...", style="yellow")
                         live.update(dashboard.get_renderable())
-                        self.agent.evolve_pool()
+                        self.agent.evolve_pool(logger=lambda msg: dashboard.log_event(msg, style="yellow"))
                         
                         dashboard.set_status("Intensive learning...")
                         dashboard.log_event("Performing intensive PPO learning...", style="magenta")

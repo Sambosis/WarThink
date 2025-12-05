@@ -173,18 +173,22 @@ class PPOSelfPlayAgent:
         self.episode_count += 1
         self.current_p2_idx = None
 
-    def evolve_pool(self):
+    def evolve_pool(self, logger: Optional[callable] = None):
         """Evolve if episode_count % 100 == 0: normalize perf/usage, top-2 elite, mutate others, promote best to [0]."""
         # Note: episode_count here tracks MANUALLY played episodes.
-        # If we use learn(), we might want to track total steps or something else.
-        # But let's stick to the existing logic which is driven by Trainer loop.
         
+        def log(msg):
+            if logger:
+                logger(msg)
+            else:
+                print(msg)
+
         recent_rewards = self.episode_rewards[-200:] if len(self.episode_rewards) >= 200 else self.episode_rewards
         if not recent_rewards:
             return
             
         recent_avg = np.mean(recent_rewards)
-        print(f"Pool evolution triggered. Recent avg reward: {recent_avg:.3f}")
+        log(f"Pool evolution triggered. Recent avg reward: {recent_avg:.3f}")
         
         # Normalize performances by usage
         normalized_performances = np.array([
@@ -192,33 +196,54 @@ class PPOSelfPlayAgent:
             for perf, usage in zip(self.pool_performances, self.pool_usage_count)
         ])
         
+        # Log all performances for visibility
+        perf_str = ", ".join([f"P{i}:{p:.3f}" for i, p in enumerate(normalized_performances)])
+        log(f"Pool Performance: {perf_str}")
+
         top_indices = np.argsort(normalized_performances)[-2:]
         top_scores = normalized_performances[top_indices]
         scores_str = ", ".join([f"{s:.3f}" for s in top_scores])
-        print(f"Top performers: {top_indices} (scores: {scores_str})")
+        log(f"Top performers: {top_indices} (scores: {scores_str})")
         
-        # Mutate only the worst performer
+        # Mutate only the worst performer OR save P0
         worst_idx = np.argmin(normalized_performances)
-        # Ensure we don't mutate the best one if for some reason it's also the worst (e.g. pool size 1, or all equal)
-        # But pool size is usually > 1.
-        if worst_idx not in top_indices:
-             self.mutate_policy(self.policy_pool[worst_idx])
-             # print(f"Mutated worst policy {worst_idx} (score: {normalized_performances[worst_idx]:.3f})")
-        else:
-             # If worst is in top (e.g. small pool), mutate a random non-top
-             non_top = [i for i in range(len(self.policy_pool)) if i not in top_indices]
-             if non_top:
-                 idx = np.random.choice(non_top)
-                 self.mutate_policy(self.policy_pool[idx])
-                 # print(f"Mutated policy {idx}")
-        
-        # Promote best to main
         best_idx = int(top_indices[-1])
-        if best_idx != 0:
+        
+        if best_idx == 0:
+            # Case 1: Active Learner is Best
+            # Keep P0. Mutate worst to maintain diversity.
+            target_idx = worst_idx
+            if target_idx == 0: # If pool size 1 or all equal
+                 non_top = [i for i in range(len(self.policy_pool)) if i != 0]
+                 if non_top: target_idx = np.random.choice(non_top)
+            
+            if target_idx != 0:
+                log(f"Active Learner (P0) is Best! Keeping P0. Mutating worst policy P{target_idx} (score: {normalized_performances[target_idx]:.3f})")
+                self.mutate_policy(self.policy_pool[target_idx])
+            else:
+                log("Active Learner (P0) is Best and dominant. No mutation performed.")
+                
+        else:
+            # Active Learner is NOT the best.
+            # Check if it is better than the worst
+            p0_score = normalized_performances[0]
+            worst_score = normalized_performances[worst_idx]
+            
+            if p0_score > worst_score:
+                # Case 2: Active Learner is Middle (Better than Worst)
+                # Save P0 by overwriting the Worst
+                log(f"Active Learner (P0) is decent (score: {p0_score:.3f} > {worst_score:.3f}). Saving P0 to slot P{worst_idx} (replacing worst).")
+                p0_params = self.policy_pool[0].get_parameters()
+                self.policy_pool[worst_idx].set_parameters(p0_params)
+            else:
+                # Case 3: Active Learner is Worst
+                log(f"Active Learner (P0) is worst (score: {p0_score:.3f}). Discarding.")
+
+            # Promote Best to P0
             best_params = self.policy_pool[best_idx].get_parameters()
             self.policy_pool[0].set_parameters(best_params)
-        self.model = self.policy_pool[0]
-        print(f"Best policy {best_idx} promoted to main (slot 0)")
+            self.model = self.policy_pool[0]
+            log(f"Best policy {best_idx} promoted to main (slot 0) - This is now the ACTIVE LEARNER")
         
         # Reset stats
         self.pool_performances = [0.0] * len(self.policy_pool)

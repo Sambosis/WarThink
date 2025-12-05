@@ -1,6 +1,7 @@
 from __future__ import annotations
 import numpy as np
 from typing import List, Tuple, Optional, Dict
+from config import cfg
 
 class Unit:
     """
@@ -40,7 +41,7 @@ class GameState:
     Manages the full game board, units, and state transitions for a single episode.
     
     Attributes:
-        grid: Observation tensor (10,10,5) - updated by generate_obs
+        grid: Observation tensor (grid_size, grid_size, 5) - updated by generate_obs
         p1_units: List of Player 1 units
         p2_units: List of Player 2 units
         current_player: Active player (1 or 2)
@@ -48,7 +49,8 @@ class GameState:
         winner: Winner (1, 2, or 0 for tie) or None
     """
     def __init__(self):
-        self.grid = np.zeros((10, 10, 5), dtype=np.float32)
+        gs = cfg.env.grid_size
+        self.grid = np.zeros((gs, gs, 5), dtype=np.float32)
         self.p1_units: List[Unit] = []
         self.p2_units: List[Unit] = []
         self.current_player = 1
@@ -59,17 +61,31 @@ class GameState:
     def reset(self):
         """Reset to initial game state with units in opposite corners."""
         unit_types = ['warrior', 'warrior', 'archer', 'archer', 'commander']
+        gs = cfg.env.grid_size
+        
         # P1 starts bottom-left
-        p1_positions = [(9, 0), (9, 1), (8, 0), (8, 1), (9, 2)]
+        # (gs-1, 0), (gs-1, 1), (gs-2, 0), (gs-2, 1), (gs-1, 2)
+        p1_positions = [
+            (gs-1, 0), (gs-1, 1), 
+            (gs-2, 0), (gs-2, 1), 
+            (gs-1, 2)
+        ]
         self.p1_units = [Unit(p1_positions[i], unit_types[i], 1) for i in range(5)]
+        
         # P2 starts top-right
-        p2_positions = [(0, 9), (1, 9), (0, 8), (1, 8), (0, 7)]
+        # (0, gs-1), (1, gs-1), (0, gs-2), (1, gs-2), (0, gs-3)
+        p2_positions = [
+            (0, gs-1), (1, gs-1), 
+            (0, gs-2), (1, gs-2), 
+            (0, gs-3)
+        ]
         self.p2_units = [Unit(p2_positions[i], unit_types[i], 2) for i in range(5)]
+        
         self.current_player = 1
         self.turn_count = 0
         self.winner = None
         self.win_condition = None
-        self.grid = np.zeros((10, 10, 5), dtype=np.float32)
+        self.grid = np.zeros((gs, gs, 5), dtype=np.float32)
     
     def get_current_units(self) -> List[Unit]:
         """Get units for the current player."""
@@ -93,7 +109,7 @@ class GameState:
             self.win_condition = 'annihilation'
             return True
         
-        if self.turn_count >= 500:
+        if self.turn_count >= cfg.env.max_turns:
             p1_count = len(p1_alive_units)
             p2_count = len(p2_alive_units)
             if p1_count > p2_count:
@@ -117,14 +133,8 @@ def generate_obs(state: GameState) -> np.ndarray:
     # Ch 3: Enemy Unit HP
     # Ch 4: Valid Move/Attack Mask (for Self)
     
-    # Transpose to (5, 10, 10) for CNN
-    # Ch 0: Self Unit Type
-    # Ch 1: Self Unit HP
-    # Ch 2: Enemy Unit Type
-    # Ch 3: Enemy Unit HP
-    # Ch 4: Valid Move/Attack Mask
-    
-    obs = np.zeros((5, 10, 10), dtype=np.float32)
+    gs = cfg.env.grid_size
+    obs = np.zeros((5, gs, gs), dtype=np.float32)
     type_map = {'warrior': 1.0, 'archer': 2.0, 'commander': 3.0}
 
     current_units = state.get_current_units()
@@ -146,7 +156,7 @@ def generate_obs(state: GameState) -> np.ndarray:
 
     # Valid moves mask ch4
     deltas = [(-1, 0), (1, 0), (0, 1), (0, -1)]  # N S E W
-    mask_grid = np.zeros((10, 10), dtype=np.float32)
+    mask_grid = np.zeros((gs, gs), dtype=np.float32)
     for unit in current_units:
         if not unit.alive:
             continue
@@ -158,21 +168,20 @@ def generate_obs(state: GameState) -> np.ndarray:
 
         # move targets
         for dy, dx in deltas:
-            ny = max(0, min(9, y + dy * move_range))
-            nx = max(0, min(9, x + dx * move_range))
+            ny = max(0, min(gs - 1, y + dy * move_range))
+            nx = max(0, min(gs - 1, x + dx * move_range))
             mask_grid[ny, nx] = 1.0
 
         # attack ray targets
         for dy, dx in deltas:
             for step in range(1, attack_range + 1):
-                ny = max(0, min(9, y + dy * step))
-                nx = max(0, min(9, x + dx * step))
+                ny = max(0, min(gs - 1, y + dy * step))
+                nx = max(0, min(gs - 1, x + dx * step))
                 mask_grid[ny, nx] = 1.0
 
     obs[4, :, :] = mask_grid
 
-    # Note: state.grid is used for rendering, which might expect (10, 10, 5)
-    # But for now let's keep it consistent with obs
+    # Note: state.grid is used for rendering
     state.grid = obs.copy()
     return obs
 
@@ -187,7 +196,8 @@ def resolve_actions(state: GameState, actions: np.ndarray) -> List[Tuple[str, st
     dir_labels = ['', 'N', 'S', 'E', 'W']  # index 1-4
     intended_moves: Dict[Tuple[int, int], List[int]] = {}
     attack_list: List[Tuple[int, int, int, int, int]] = []  # unit_idx, dy, dx, max_range, log_idx
-
+    
+    gs = cfg.env.grid_size
     current_player_str = str(state.current_player)
 
     # Parse actions
@@ -203,8 +213,8 @@ def resolve_actions(state: GameState, actions: np.ndarray) -> List[Tuple[str, st
         if act < 5:  # move/stay
             dy, dx = deltas[act]
             move_range = 2 if unit.type_ == 'commander' else 1
-            new_y = max(0, min(9, unit.pos[0] + dy * move_range))
-            new_x = max(0, min(9, unit.pos[1] + dx * move_range))
+            new_y = max(0, min(gs - 1, unit.pos[0] + dy * move_range))
+            new_x = max(0, min(gs - 1, unit.pos[1] + dx * move_range))
             new_pos = (new_y, new_x)
             intended_moves.setdefault(new_pos, []).append(i)
             logs.append((unit_id, f'move to ({new_y}, {new_x})'))
@@ -228,8 +238,8 @@ def resolve_actions(state: GameState, actions: np.ndarray) -> List[Tuple[str, st
         y_pos, x_pos = unit.pos
         target = None
         for step in range(1, max_range + 1):
-            target_y = max(0, min(9, y_pos + dy * step))
-            target_x = max(0, min(9, x_pos + dx * step))
+            target_y = max(0, min(gs - 1, y_pos + dy * step))
+            target_x = max(0, min(gs - 1, x_pos + dx * step))
             target_pos = (target_y, target_x)
             for enemy in enemy_units:
                 if enemy.alive and enemy.pos == target_pos:

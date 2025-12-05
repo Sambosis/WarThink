@@ -157,6 +157,21 @@ class SelfPlayWrapper(gym.Wrapper):
         obs, reward, terminated, truncated, info = self.env.step(action)
         
         if terminated or truncated:
+            # Calculate terminal rewards for P1
+            winner = self.env.unwrapped.state.winner
+            win_condition = self.env.unwrapped.state.win_condition
+            
+            bonus = 0.0
+            if winner in [1, 2]:
+                bonus = cfg.env.annihilation_bonus if win_condition == 'annihilation' else cfg.env.attrition_bonus
+                
+                if winner == 1:
+                    reward += bonus
+                else: # winner == 2
+                    reward -= bonus # Penalize losing to encourage winning
+            elif winner == 0:
+                reward += cfg.env.draw_penalty
+
             return obs, reward, terminated, truncated, info
             
         # 2. Opponent (P2) moves
@@ -179,7 +194,22 @@ class SelfPlayWrapper(gym.Wrapper):
             
             if terminated or truncated:
                 winner = self.env.unwrapped.state.winner
+                win_condition = self.env.unwrapped.state.win_condition
                 info['winner'] = winner
+                
+                # If game ended during opponent turn, we still need to give terminal reward to P1
+                # P1 is the learning agent.
+                bonus = 0.0
+                if winner in [1, 2]:
+                    bonus = cfg.env.annihilation_bonus if win_condition == 'annihilation' else cfg.env.attrition_bonus
+                    
+                    if winner == 1:
+                        reward += bonus
+                    else: # winner == 2
+                        reward -= bonus
+                elif winner == 0:
+                    reward += cfg.env.draw_penalty
+                
                 break
                 
         return obs, reward, terminated, truncated, info
