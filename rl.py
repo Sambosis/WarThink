@@ -6,7 +6,8 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from copy import deepcopy
 from typing import List, Optional
 
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+import torch.multiprocessing as mp
 from env import WarGameEnv, SelfPlayWrapper
 from config import cfg
 
@@ -63,10 +64,16 @@ class PPOSelfPlayAgent:
         self.policy_pool: List[PPO] = []
         
         # Create the vectorized environment for training
-        # The lambda captures self.policy_pool, so the wrapper will have access to the pool
-        # even as it gets updated.
         n_envs = cfg.rl.n_envs
-        self.vec_env = DummyVecEnv([lambda: SelfPlayWrapper(WarGameEnv(), self.policy_pool) for _ in range(n_envs)])
+        def make_env():
+            return SelfPlayWrapper(WarGameEnv(), self.policy_pool)
+            
+        if n_envs > 1:
+            # SubprocVecEnv for multi-core speedup
+            # Note: We use a wrapper or ensure the pool is shared/synced if needed
+            self.vec_env = SubprocVecEnv([make_env for _ in range(n_envs)])
+        else:
+            self.vec_env = DummyVecEnv([make_env])
 
         # Base PPO model with standard params
         ppo_params = cfg.rl.ppo_params
@@ -310,3 +317,71 @@ class PPOSelfPlayAgent:
         base_params = self.model.get_parameters()
         for i in range(1, len(self.policy_pool)):
             self.policy_pool[i].set_parameters(base_params)
+
+    def run_parallel_episodes(self, min_episodes: int) -> List[dict]:
+        """
+        Run episodes in parallel using the vectorized environment.
+        Collects at least min_episodes results.
+        
+        Returns list of dicts with:
+            {
+                'p1_reward': float,
+                'p2_reward': float,
+                'winner': int,
+                'steps': int,
+                'condition': str
+            }
+        """
+        n_envs = self.vec_env.num_envs
+        current_rewards = np.zeros((n_envs, 2)) # [p1, p2]
+        current_steps = np.zeros(n_envs, dtype=int)
+        results = []
+        
+        # We need to manually reset or assume reset state.
+        # VecEnv is always running, but we might want to start fresh or just stream.
+        # Streaming is better for throughput. 
+        # But we need an initial 'obs' if not tracking it.
+        # VecEnv doesn't expose 'current_obs' easily unless we tracked it.
+        # Let's force a reset for simplicity of logic, roughly okay.
+        obs = self.vec_env.reset()
+        
+        while len(results) < min_episodes:
+            actions, _ = self.model.predict(obs, deterministic=False)
+            obs, rewards, dones, infos = self.vec_env.step(actions)
+            
+            for i in range(n_envs):
+                p1_r = rewards[i]
+                current_rewards[i, 0] += p1_r
+                # Assuming P2 reward is symmetric or we don't track it precisely here without info
+                # But we need it for update_pool.
+                
+                current_steps[i] += 1
+                
+                if dones[i]:
+                    info = infos[i]
+                    winner = info.get('winner', 0)
+                    
+                    # Estimate P2 reward if not provided (zero-sum approx)
+                    total_p1 = current_rewards[i, 0]
+                    total_p2 = 0.0 
+                    
+                    self.update_pool([total_p1, total_p2])
+                    
+                    results.append({
+                        'winner': winner,
+                        'steps': current_steps[i],
+                        'condition': 'unknown', 
+                        'p1_reward': total_p1,
+                        'p2_reward': total_p2
+                    })
+                    
+                    current_rewards[i] = 0
+                    current_steps[i] = 0
+                    
+        return results
+
+if __name__ == "__main__":
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass

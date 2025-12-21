@@ -23,11 +23,11 @@ class EnvConfig:
 class RLConfig:
     pool_size: int = 12
     noise_std: float = 0.1
-    n_envs: int = 16
+    n_envs: int = 10
     
     # PPO Hyperparameters
-    n_steps: int = 8192        # Steps per env per update (buffer size = n_steps * n_envs)
-    batch_size: int = 8192     # Minibatch size for gradient update
+    n_steps: int = 400        # Steps per env per update (buffer size = n_steps * n_envs = 4000)
+    batch_size: int = 1000     # Minibatch size for gradient update
     learning_rate: float = 5e-4 # Optimizer step size
     n_epochs: int = 5         # Number of passes over the buffer per update
     gamma: float = 0.995       # Discount factor for future rewards (0.995 = long horizon)
@@ -54,8 +54,9 @@ class TrainerConfig:
     stats_window: int = 250
     
     # Training Loop
-    quick_learn_steps: int = 16384
-    intensive_learn_steps: int = 65536
+    # Training Loop
+    quick_learn_steps: int = 4000
+    intensive_learn_steps: int = 32000
     
     quick_learn_freq: int = 100
     intensive_learn_freq: int = 1000

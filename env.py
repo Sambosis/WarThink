@@ -133,6 +133,8 @@ class SelfPlayWrapper(gym.Wrapper):
         self.policy_pool = policy_pool
         self.opponent_policy = None
         self.opponent_idx = None
+        # Enable training optimizations by default for wrapped envs
+        self.env.unwrapped.state.training = True
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)

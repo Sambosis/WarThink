@@ -176,15 +176,86 @@ class Trainer:
         with Live(dashboard.get_renderable(), refresh_per_second=4) as live:
             try:
                 while self.episode_count < max_episodes:
-                    dashboard.set_status("Playing episode...")
+                    dashboard.set_status("Collecting episodes...")
                     live.update(dashboard.get_renderable())
                     
-                    self.play_episode(dashboard=dashboard)
-                    self.episode_count += 1
+                    # Run batch of episodes in parallel
+                    batch_size = cfg.rl.n_envs
+                    results = self.agent.run_parallel_episodes(batch_size)
                     
-                    # Update stats every episode
+                    for res in results:
+                        self.episode_count += 1
+                        self.total_steps += res['steps']
+                        self.episode_rewards.append(res['p1_reward'])
+                        
+                        winner = res['winner']
+                        condition = res['condition']
+                        
+                        # Tracking stats
+                        self.episode_details.append({
+                            'winner': winner,
+                            'condition': condition,
+                            'steps': res['steps']
+                        })
+                        self.episode_winners.append(winner)
+                        
+                        # Annihilation tracking (approximate based on condition)
+                        if winner == 1 and condition == 'annihilation':
+                            self.p1_total_annihilations += 1
+                        elif winner == 2 and condition == 'annihilation':
+                            self.p2_total_annihilations += 1
+
+                        # CSV Logging every 100 episodes
+                        if self.episode_count % 100 == 0:
+                            stats = self.get_recent_stats(cfg.trainer.stats_window)
+                            # Unpack all stats
+                            (avg_reward, p1_win_rate, p1_annihil, p1_attrit, 
+                             p2_annihil, p2_attrit, draw_rate, avg_steps) = stats
+                             
+                            with open(self.csv_log_path, 'a', newline='') as f:
+                                writer = csv.writer(f)
+                                writer.writerow([
+                                    self.episode_count, 
+                                    f"{avg_reward:.2f}", 
+                                    f"{p1_win_rate:.2f}",
+                                    f"{p1_annihil:.2f}",
+                                    f"{p1_attrit:.2f}",
+                                    f"{p2_annihil:.2f}",
+                                    f"{p2_attrit:.2f}",
+                                    f"{draw_rate:.2f}",
+                                    f"{avg_steps:.1f}",
+                                    datetime.datetime.now().isoformat()
+                                ])
+                        
+                        if self.episode_count % cfg.trainer.quick_learn_freq == 0:
+                            dashboard.set_status("Quick learning...")
+                            live.update(dashboard.get_renderable())
+                            self.agent.learn(total_timesteps=cfg.trainer.quick_learn_steps)
+                            
+                        if self.episode_count % cfg.trainer.intensive_learn_freq == 0:
+                            dashboard.log_event(f"--- Episode {self.episode_count} ---", style="bold")
+                            
+                            dashboard.set_status("Evolving pool...")
+                            live.update(dashboard.get_renderable())
+                            self.agent.evolve_pool(logger=lambda msg: dashboard.log_event(msg, style="yellow"))
+                            
+                            dashboard.set_status("Intensive learning...")
+                            dashboard.log_event("Performing intensive PPO learning...", style="magenta")
+                            live.update(dashboard.get_renderable())
+                            self.agent.learn(total_timesteps=cfg.trainer.intensive_learn_steps)
+                            
+                            dashboard.set_status("Evaluating...")
+                            dashboard.log_event("Rendering evaluation game...", style="blue")
+                            live.update(dashboard.get_renderable())
+                            self.eval_render(dashboard=dashboard)
+                            
+                        if self.episode_count % cfg.trainer.checkpoint_freq == 0:
+                            checkpoint_path = f"models/checkpoint_{self.episode_count}.zip"
+                            self.agent.save(checkpoint_path)
+                            dashboard.log_event(f"Checkpoint saved: {checkpoint_path}", style="bold green")
+
+                    # Update dashboard stats after batch
                     stats = self.get_recent_stats(cfg.trainer.stats_window)
-                    # Unpack all stats
                     (avg_reward, p1_win_rate, p1_annihil, p1_attrit, 
                      p2_annihil, p2_attrit, draw_rate, avg_steps) = stats
                      
@@ -194,53 +265,7 @@ class Trainer:
                         draw_rate, avg_steps, self.total_steps,
                         self.p1_total_annihilations, self.p2_total_annihilations
                     )
-
-                    # CSV Logging every 100 episodes
-                    if self.episode_count % 100 == 0:
-                        with open(self.csv_log_path, 'a', newline='') as f:
-                            writer = csv.writer(f)
-                            writer.writerow([
-                                self.episode_count, 
-                                f"{avg_reward:.2f}", 
-                                f"{p1_win_rate:.2f}",
-                                f"{p1_annihil:.2f}",
-                                f"{p1_attrit:.2f}",
-                                f"{p2_annihil:.2f}",
-                                f"{p2_attrit:.2f}",
-                                f"{draw_rate:.2f}",
-                                f"{avg_steps:.1f}",
-                                datetime.datetime.now().isoformat()
-                            ])
                     
-                    if self.episode_count % cfg.trainer.quick_learn_freq == 0:
-                        dashboard.set_status("Quick learning...")
-                        # dashboard.log_event(f"Quick learn at ep {self.episode_count}...", style="dim")
-                        live.update(dashboard.get_renderable())
-                        self.agent.learn(total_timesteps=cfg.trainer.quick_learn_steps)
-                        
-                    if self.episode_count % cfg.trainer.intensive_learn_freq == 0:
-                        dashboard.log_event(f"--- Episode {self.episode_count} ---", style="bold")
-                        
-                        dashboard.set_status("Evolving pool...")
-                        # dashboard.log_event("Evolving policy pool...", style="yellow")
-                        live.update(dashboard.get_renderable())
-                        self.agent.evolve_pool(logger=lambda msg: dashboard.log_event(msg, style="yellow"))
-                        
-                        dashboard.set_status("Intensive learning...")
-                        dashboard.log_event("Performing intensive PPO learning...", style="magenta")
-                        live.update(dashboard.get_renderable())
-                        self.agent.learn(total_timesteps=cfg.trainer.intensive_learn_steps)
-                        
-                        dashboard.set_status("Evaluating...")
-                        dashboard.log_event("Rendering evaluation game...", style="blue")
-                        live.update(dashboard.get_renderable())
-                        self.eval_render(dashboard=dashboard)
-                        
-                    if self.episode_count % cfg.trainer.checkpoint_freq == 0:
-                        checkpoint_path = f"models/checkpoint_{self.episode_count}.zip"
-                        self.agent.save(checkpoint_path)
-                        dashboard.log_event(f"Checkpoint saved: {checkpoint_path}", style="bold green")
-                        
                     live.update(dashboard.get_renderable())
                     
             except KeyboardInterrupt:
@@ -250,3 +275,12 @@ class Trainer:
                     self.agent.save(checkpoint_path)
                     dashboard.log_event(f"Final checkpoint saved: {checkpoint_path}", style="bold green")
                 live.update(dashboard.get_renderable())
+
+if __name__ == "__main__":
+    import torch.multiprocessing as mp
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+    trainer = Trainer()
+    trainer.train()

@@ -1,7 +1,10 @@
 from __future__ import annotations
 import numpy as np
-from typing import List, Tuple, Optional, Dict
 from config import cfg
+
+# Valid move deltas: stay, N, S, E, W
+MOVES = np.array([(0, 0), (-1, 0), (1, 0), (0, 1), (0, -1)])
+TYPE_MAP = {'warrior': 1.0, 'archer': 2.0, 'commander': 3.0}
 
 class Unit:
     """
@@ -57,6 +60,7 @@ class GameState:
         self.turn_count = 0
         self.winner: Optional[int] = None
         self.win_condition: Optional[str] = None
+        self.training = False # Flag to skip logs/rendering logic
     
     def reset(self):
         """Reset to initial game state with units in opposite corners."""
@@ -126,63 +130,90 @@ class GameState:
         return False
 
 def generate_obs(state: GameState) -> np.ndarray:
-    # Canonical observation:
-    # Ch 0: Self Unit Type
-    # Ch 1: Self Unit HP
-    # Ch 2: Enemy Unit Type
-    # Ch 3: Enemy Unit HP
-    # Ch 4: Valid Move/Attack Mask (for Self)
-    
     gs = cfg.env.grid_size
+    # 5 channels, 8x8 grid = 320 floats.
     obs = np.zeros((5, gs, gs), dtype=np.float32)
-    type_map = {'warrior': 1.0, 'archer': 2.0, 'commander': 3.0}
 
     current_units = state.get_current_units()
     enemy_units = state.get_enemy_units()
 
-    # Self units -> Ch 0/1
-    for unit in current_units:
-        if unit.alive:
-            y, x = unit.pos
-            obs[0, y, x] = type_map[unit.type_] / 3.0
-            obs[1, y, x] = unit.hp / unit.max_hp
+    # Pre-fetching constants
+    # TYPE_MAP global
+    
+    # Ch 0-3: Unit placement
+    # Direct assignment is faster than list append + np.array() for N=5
+    for u in current_units:
+        if u.alive:
+            y, x = u.pos
+            obs[0, y, x] = TYPE_MAP[u.type_] / 3.0
+            obs[1, y, x] = u.hp / u.max_hp
+            
+    for u in enemy_units:
+        if u.alive:
+            y, x = u.pos
+            obs[2, y, x] = TYPE_MAP[u.type_] / 3.0
+            obs[3, y, x] = u.hp / u.max_hp
 
-    # Enemy units -> Ch 2/3
-    for unit in enemy_units:
-        if unit.alive:
-            y, x = unit.pos
-            obs[2, y, x] = type_map[unit.type_] / 3.0
-            obs[3, y, x] = unit.hp / unit.max_hp
+    # Ch 4: Mask generation
+    # Optimized Python loop for small N
+    mask_grid = obs[4] # View
+    
+    # Deltas: N, S, E, W
+    deltas = [(-1, 0), (1, 0), (0, 1), (0, -1)]
 
-    # Valid moves mask ch4
-    deltas = [(-1, 0), (1, 0), (0, 1), (0, -1)]  # N S E W
-    mask_grid = np.zeros((gs, gs), dtype=np.float32)
-    for unit in current_units:
-        if not unit.alive:
+    for u in current_units:
+        if not u.alive:
             continue
-        y, x = unit.pos
-        mask_grid[y, x] = 1.0  # stay pos
+            
+        y, x = u.pos
+        mask_grid[y, x] = 1.0 # stay
 
-        move_range = 2 if unit.type_ == 'commander' else 1
-        attack_range = 3 if unit.type_ == 'archer' else 1
-
-        # move targets
+        move_range = 2 if u.type_ == 'commander' else 1
+        attack_range = 3 if u.type_ == 'archer' else 1
+        
+        # Valid moves
         for dy, dx in deltas:
-            ny = max(0, min(gs - 1, y + dy * move_range))
-            nx = max(0, min(gs - 1, x + dx * move_range))
+            # Inline boundary checks are faster than min/max calls if optimized, 
+            # but min/max is readable and reasonably fast.
+            # Using Move Range
+            ny = y + dy * move_range
+            nx = x + dx * move_range
+            
+            # fast clamp
+            if ny < 0: ny = 0
+            elif ny >= gs: ny = gs - 1
+            
+            if nx < 0: nx = 0
+            elif nx >= gs: nx = gs - 1
+            
             mask_grid[ny, nx] = 1.0
 
-        # attack ray targets
+        # Attack ranges (Ray)
         for dy, dx in deltas:
-            for step in range(1, attack_range + 1):
-                ny = max(0, min(gs - 1, y + dy * step))
-                nx = max(0, min(gs - 1, x + dx * step))
-                mask_grid[ny, nx] = 1.0
+            curr_y, curr_x = y, x
+            for _ in range(attack_range):
+                curr_y += dy
+                curr_x += dx
+                
+                # Manual clamp check to break early if OOB? 
+                # Actually clamping snaps to edge. The logic says "targets on ray".
+                # If we clamp, we might wrap around or hit edge repeatedly.
+                # Original logic: ny = max(0, min(gs - 1, y + dy * step))
+                # It clamps.
+                
+                cy = curr_y
+                cx = curr_x
+                if cy < 0: cy = 0
+                elif cy >= gs: cy = gs - 1
+                if cx < 0: cx = 0
+                elif cx >= gs: cx = gs - 1
+                
+                mask_grid[cy, cx] = 1.0
 
-    obs[4, :, :] = mask_grid
-
-    # Note: state.grid is used for rendering
-    state.grid = obs.copy()
+    # Skip render grid copy during training
+    if not state.training:
+        state.grid = obs.copy()
+        
     return obs
 
 def resolve_actions(state: GameState, actions: np.ndarray) -> List[Tuple[str, str]]:
@@ -191,25 +222,28 @@ def resolve_actions(state: GameState, actions: np.ndarray) -> List[Tuple[str, st
 
     current_units = state.get_current_units()
     enemy_units = state.get_enemy_units()
+    
     logs: List[Tuple[str, str]] = []
+    # If training, we skip string generation
+    training = state.training
+    
     deltas = [(0, 0), (-1, 0), (1, 0), (0, 1), (0, -1)]  # stay, N, S, E, W
-    dir_labels = ['', 'N', 'S', 'E', 'W']  # index 1-4
+    
     intended_moves: Dict[Tuple[int, int], List[int]] = {}
-    attack_list: List[Tuple[int, int, int, int, int]] = []  # unit_idx, dy, dx, max_range, log_idx
+    attack_list: List[Tuple[int, int, int, int, int]] = []  # unit_idx, dy, dx, max_range, log_idx (-1 if no log)
     
     gs = cfg.env.grid_size
     current_player_str = str(state.current_player)
 
     # Parse actions
     for i in range(5):
-        unit_id = f'{current_player_str}u{i}'
-        if not current_units[i].alive:
-            logs.append((unit_id, 'stay (dead)'))
+        unit = current_units[i]
+        if not unit.alive:
+            if not training: logs.append((f'{current_player_str}u{i}', 'stay (dead)'))
             continue
     
         act = int(actions[i])
-        unit = current_units[i]
-    
+        
         if act < 5:  # move/stay
             dy, dx = deltas[act]
             move_range = 2 if unit.type_ == 'commander' else 1
@@ -217,14 +251,20 @@ def resolve_actions(state: GameState, actions: np.ndarray) -> List[Tuple[str, st
             new_x = max(0, min(gs - 1, unit.pos[1] + dx * move_range))
             new_pos = (new_y, new_x)
             intended_moves.setdefault(new_pos, []).append(i)
-            logs.append((unit_id, f'move to ({new_y}, {new_x})'))
+            if not training: 
+                logs.append((f'{current_player_str}u{i}', f'move to ({new_y}, {new_x})'))
         else:  # attack
             dir_idx = act - 5
             dy, dx = deltas[dir_idx + 1]
             attack_range = 3 if unit.type_ == 'archer' else 1
-            dir_label = dir_labels[dir_idx + 1]
-            logs.append((unit_id, f'attack {dir_label}'))
-            log_idx = len(logs) - 1
+            if not training:
+                dir_labels = ['', 'N', 'S', 'E', 'W']
+                dir_label = dir_labels[dir_idx + 1]
+                logs.append((f'{current_player_str}u{i}', f'attack {dir_label}'))
+                log_idx = len(logs) - 1
+            else:
+                log_idx = -1
+                
             attack_list.append((i, dy, dx, attack_range, log_idx))
 
     # Resolve moves: priority to single claimants, skip collisions
@@ -249,8 +289,9 @@ def resolve_actions(state: GameState, actions: np.ndarray) -> List[Tuple[str, st
                 break
         if target:
             unit.attack(target)
-            enemy_idx = enemy_units.index(target)
-            old_unit_id, _ = logs[log_idx]
-            logs[log_idx] = (old_unit_id, f'attack hit enemy u{enemy_idx}')
+            if not training and log_idx != -1:
+                enemy_idx = enemy_units.index(target)
+                old_unit_id, _ = logs[log_idx]
+                logs[log_idx] = (old_unit_id, f'attack hit enemy u{enemy_idx}')
 
     return logs
