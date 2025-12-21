@@ -121,9 +121,9 @@ class Trainer:
             p1_total_reward += cfg.env.draw_penalty
             p2_total_reward += cfg.env.draw_penalty
         
-        # Log the final total reward (sum of dense + terminal rewards)
-        final_total_reward = p1_total_reward + p2_total_reward
-        self.episode_rewards.append(final_total_reward)
+        # Log the final total reward (Active Learner / P1 only)
+        # final_total_reward = p1_total_reward + p2_total_reward
+        self.episode_rewards.append(p1_total_reward)
         self.episode_details.append({
             'winner': winner,
             'condition': win_condition,

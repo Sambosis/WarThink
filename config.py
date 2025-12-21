@@ -7,34 +7,34 @@ class EnvConfig:
     render_fps: int = 60
     grid_size: int = 8
     n_units: int = 5
-    max_turns: int = 600
+    max_turns: int = 500
     
     # Rewards
-    damage_scale: float = 1.0
-    kill_bonus: float = 100.0
-    step_penalty: float = -3.0
+    damage_scale: float = 2.0
+    kill_bonus: float = 300.0
+    step_penalty: float = -7.0
     
     # Terminal Bonuses (handled in Trainer usually, but good to have here)
     annihilation_bonus: float = 1000.0
     attrition_bonus: float = 10.0
-    draw_penalty: float = -50.0
+    draw_penalty: float = -10.0
 
 @dataclass
 class RLConfig:
-    pool_size: int = 4
-    noise_std: float = 0.05
-    n_envs: int = 4
+    pool_size: int = 12
+    noise_std: float = 0.1
+    n_envs: int = 16
     
     # PPO Hyperparameters
-    n_steps: int = 2048
-    batch_size: int = 4096
-    learning_rate: float = 2.5e-4
-    n_epochs: int = 10
-    gamma: float = 0.995
-    gae_lambda: float = 0.995
-    clip_range: float = 0.2
-    ent_coef: float = 0.02
-    features_dim: int = 256
+    n_steps: int = 8192        # Steps per env per update (buffer size = n_steps * n_envs)
+    batch_size: int = 8192     # Minibatch size for gradient update
+    learning_rate: float = 5e-4 # Optimizer step size
+    n_epochs: int = 5         # Number of passes over the buffer per update
+    gamma: float = 0.995       # Discount factor for future rewards (0.995 = long horizon)
+    gae_lambda: float = 0.995  # Factor for Generalized Advantage Estimation (bias-variance trade-off)
+    clip_range: float = 0.8   # PPO clip parameter for trust region (prevents large policy updates)
+    ent_coef: float = 0.03     # Entropy coefficient (higher = more exploration)
+    features_dim: int = 256    # Dimension of the feature vector output by the CNN
     
     @property
     def ppo_params(self) -> Dict[str, Any]:
@@ -51,15 +51,15 @@ class RLConfig:
 
 @dataclass
 class TrainerConfig:
-    stats_window: int = 100
+    stats_window: int = 250
     
     # Training Loop
-    quick_learn_steps: int = 8192
-    intensive_learn_steps: int = 40960
+    quick_learn_steps: int = 16384
+    intensive_learn_steps: int = 65536
     
-    quick_learn_freq: int = 50
-    intensive_learn_freq: int = 500
-    checkpoint_freq: int = 500
+    quick_learn_freq: int = 100
+    intensive_learn_freq: int = 1000
+    checkpoint_freq: int = 1000
     
     eval_fps: int = 60
 

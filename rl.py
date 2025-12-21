@@ -102,6 +102,7 @@ class PPOSelfPlayAgent:
         self.pool_usage_count: List[int] = [0] * pool_size
         self.noise_std = noise_std
         self.current_p2_idx: Optional[int] = None
+        self.p1_rewards_history: List[float] = []
 
     def start_episode(self):
         """Select fixed P2 policy index for entire episode."""
@@ -163,6 +164,7 @@ class PPOSelfPlayAgent:
         p2_idx = self.current_p2_idx
         
         self.episode_rewards.extend(rewards)
+        self.p1_rewards_history.append(p1_reward)
         
         self.pool_performances[p1_idx] += p1_reward
         self.pool_performances[p2_idx] += p2_reward
@@ -183,12 +185,13 @@ class PPOSelfPlayAgent:
             else:
                 print(msg)
 
-        recent_rewards = self.episode_rewards[-200:] if len(self.episode_rewards) >= 200 else self.episode_rewards
+        recent_rewards = self.p1_rewards_history[-200:] if len(self.p1_rewards_history) >= 200 else self.p1_rewards_history
         if not recent_rewards:
             return
             
         recent_avg = np.mean(recent_rewards)
-        log(f"Pool evolution triggered. Recent avg reward: {recent_avg:.3f}")
+        recent_max = np.max(recent_rewards)
+        log(f"Pool evolution triggered. Active Learner Recent Avg Reward: {recent_avg:.3f}, Max Reward: {recent_max:.3f}")
         
         # Normalize performances by usage
         normalized_performances = np.array([
@@ -205,45 +208,71 @@ class PPOSelfPlayAgent:
         scores_str = ", ".join([f"{s:.3f}" for s in top_scores])
         log(f"Top performers: {top_indices} (scores: {scores_str})")
         
-        # Mutate only the worst performer OR save P0
-        worst_idx = np.argmin(normalized_performances)
-        best_idx = int(top_indices[-1])
+        # Determine number of policies to mutate (25% of pool, rounded up, at least 1)
+        n_mutations = max(1, int(np.ceil(len(self.policy_pool) * 0.25)))
         
-        if best_idx == 0:
-            # Case 1: Active Learner is Best
-            # Keep P0. Mutate worst to maintain diversity.
-            target_idx = worst_idx
-            if target_idx == 0: # If pool size 1 or all equal
-                 non_top = [i for i in range(len(self.policy_pool)) if i != 0]
-                 if non_top: target_idx = np.random.choice(non_top)
-            
-            if target_idx != 0:
-                log(f"Active Learner (P0) is Best! Keeping P0. Mutating worst policy P{target_idx} (score: {normalized_performances[target_idx]:.3f})")
-                self.mutate_policy(self.policy_pool[target_idx])
-            else:
-                log("Active Learner (P0) is Best and dominant. No mutation performed.")
-                
-        else:
-            # Active Learner is NOT the best.
-            # Check if it is better than the worst
+        # Sort indices by performance (ascending: worst -> best)
+        sorted_indices = np.argsort(normalized_performances)
+        worst_idx = sorted_indices[0] # Absolute worst
+        best_idx = sorted_indices[-1] # Absolute best
+        
+        # --- Step 1: Handle P0 Preservation ---
+        # If P0 is NOT the best, but is better than the worst, save it.
+        # We overwrite the 'worst' slot. Note: The 'worst' slot will be a candidate for mutation later?
+        # Ideally, we save P0 to a slot that ISN'T about to be mutated immediately, 
+        # OR we save it to a slot and protect that slot.
+        # LIMITATION: If we overwrite worst, it might be mutated in Step 3 if we select bottom N.
+        # FIX: We will exclude 'saved_p0_slot' from mutation if we just saved to it.
+        
+        saved_p0_slot = None
+        
+        if best_idx != 0:
             p0_score = normalized_performances[0]
             worst_score = normalized_performances[worst_idx]
             
             if p0_score > worst_score:
-                # Case 2: Active Learner is Middle (Better than Worst)
-                # Save P0 by overwriting the Worst
-                log(f"Active Learner (P0) is decent (score: {p0_score:.3f} > {worst_score:.3f}). Saving P0 to slot P{worst_idx} (replacing worst).")
+                log(f"Active Learner (P0) is decent (score: {p0_score:.3f} > {worst_score:.3f}). Saving P0 to slot P{worst_idx}.")
                 p0_params = self.policy_pool[0].get_parameters()
                 self.policy_pool[worst_idx].set_parameters(p0_params)
+                saved_p0_slot = worst_idx
             else:
-                # Case 3: Active Learner is Worst
                 log(f"Active Learner (P0) is worst (score: {p0_score:.3f}). Discarding.")
 
-            # Promote Best to P0
+        # --- Step 2: Promote Best to P0 ---
+        # Note: If best_idx was 0, this is a no-op, which is fine.
+        if best_idx != 0:
             best_params = self.policy_pool[best_idx].get_parameters()
             self.policy_pool[0].set_parameters(best_params)
             self.model = self.policy_pool[0]
             log(f"Best policy {best_idx} promoted to main (slot 0) - This is now the ACTIVE LEARNER")
+        else:
+             log(f"Active Learner (P0) is already the Best. Keeping it.")
+
+        # --- Step 3: Mutate Weakest ---
+        # We want to mutate the bottom N performers.
+        # But we must NOT mutate:
+        # 1. P0 (The new active learner, our best hope)
+        # 2. saved_p0_slot (Unless we didn't save anything) -- WAIT. 
+        #    If we saved P0 to worst_idx, effectively worst_idx is now a COPY of the old P0.
+        #    Do we want to mutate it immediately? NO. We saved it because it was decent.
+        #    So we should treat 'saved_p0_slot' as protected.
+        
+        candidates = []
+        # Walk through sorted indices from worst to best
+        for idx in sorted_indices:
+            idx = int(idx)
+            if len(candidates) >= n_mutations:
+                break
+            
+            # Exclusions
+            if idx == 0: continue # Don't mutate active learner
+            if idx == saved_p0_slot: continue # Don't mutate the just-saved decent policy
+            
+            candidates.append(idx)
+            
+        log(f"Mutating bottom {len(candidates)} policies: {candidates}")
+        for idx in candidates:
+             self.mutate_policy(self.policy_pool[idx])
         
         # Reset stats
         self.pool_performances = [0.0] * len(self.policy_pool)
