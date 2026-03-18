@@ -144,31 +144,25 @@ class PPOSelfPlayAgent:
         
         return actions
 
-    def update_pool(self, rewards: List[float]):
+    def update_pool(self, rewards: List[float], opponent_idx: Optional[int] = None):
         """
         Credit episode rewards to used policies, increment usage.
         
         Args:
             rewards: [p1_reward, p2_reward]
+            opponent_idx: override self.current_p2_idx (needed for parallel environments)
         """
         if len(rewards) != 2:
             print("Warning: update_pool called with invalid rewards.")
             return
-            
-        # If we are in training loop via learn(), this might not be called manually per episode
-        # But Trainer.play_episode calls it.
-        # If we use learn(), the VecEnv wrapper handles the game, but it doesn't update pool stats directly?
-        # The wrapper returns rewards to the agent.
-        # We need a way to track pool performance during 'learn()'.
-        # The SelfPlayWrapper could track it, or we just rely on the manual evaluation episodes for evolution stats.
-        # Given the structure, let's rely on Trainer's manual episodes for stats for now.
+
+        p2_idx = opponent_idx if opponent_idx is not None else self.current_p2_idx
         
-        if self.current_p2_idx is None:
+        if p2_idx is None:
              return
         
         p1_reward, p2_reward = rewards
         p1_idx = 0
-        p2_idx = self.current_p2_idx
         
         self.episode_rewards.extend(rewards)
         self.p1_rewards_history.append(p1_reward)
@@ -180,7 +174,9 @@ class PPOSelfPlayAgent:
         self.pool_usage_count[p2_idx] += 1
         
         self.episode_count += 1
-        self.current_p2_idx = None
+        # Only clear current_p2_idx if we used it (serial mode)
+        if opponent_idx is None:
+            self.current_p2_idx = None
 
     def evolve_pool(self, logger: Optional[callable] = None):
         """Evolve if episode_count % 100 == 0: normalize perf/usage, top-2 elite, mutate others, promote best to [0]."""
@@ -352,25 +348,26 @@ class PPOSelfPlayAgent:
             for i in range(n_envs):
                 p1_r = rewards[i]
                 current_rewards[i, 0] += p1_r
-                # Assuming P2 reward is symmetric or we don't track it precisely here without info
-                # But we need it for update_pool.
+                # P2 reward accumulated by wrapper in info['p2_total_reward']
                 
                 current_steps[i] += 1
                 
                 if dones[i]:
                     info = infos[i]
                     winner = info.get('winner', 0)
+                    win_condition = info.get('win_condition', 'unknown')
+                    total_p2 = info.get('p2_total_reward', 0.0)
+                    opponent_idx = info.get('opponent_idx', None)
                     
-                    # Estimate P2 reward if not provided (zero-sum approx)
                     total_p1 = current_rewards[i, 0]
-                    total_p2 = 0.0 
                     
-                    self.update_pool([total_p1, total_p2])
+                    # Update pool with correct opponent assignment
+                    self.update_pool([total_p1, total_p2], opponent_idx=opponent_idx)
                     
                     results.append({
                         'winner': winner,
                         'steps': current_steps[i],
-                        'condition': 'unknown', 
+                        'condition': win_condition, 
                         'p1_reward': total_p1,
                         'p2_reward': total_p2
                     })

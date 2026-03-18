@@ -108,6 +108,7 @@ class WarGameEnv(gym.Env):
         info = {
             'acting_player': acting_player,
             'winner': self.state.winner if terminated else None,
+            'win_condition': self.state.win_condition if terminated else None,
             'turn_count': self.state.turn_count,
             'reward_components': {
                 'damage_enemy': damage_to_enemy,
@@ -133,10 +134,13 @@ class SelfPlayWrapper(gym.Wrapper):
         self.policy_pool = policy_pool
         self.opponent_policy = None
         self.opponent_idx = None
+        # Track P2 total reward for pool updates
+        self.p2_total_reward = 0.0
         # Enable training optimizations by default for wrapped envs
         self.env.unwrapped.state.training = True
 
     def reset(self, **kwargs):
+        self.p2_total_reward = 0.0
         obs, info = self.env.reset(**kwargs)
         
         # Select opponent policy if pool is available
@@ -174,6 +178,13 @@ class SelfPlayWrapper(gym.Wrapper):
             elif winner == 0:
                 reward += cfg.env.draw_penalty
 
+            # Inject extra stats for parallel trainer
+            info['opponent_idx'] = self.opponent_idx
+            info['p2_total_reward'] = self.p2_total_reward
+            # Ensure win_condition is present (passed from env or set here)
+            if 'win_condition' not in info:
+                info['win_condition'] = self.env.unwrapped.state.win_condition
+                
             return obs, reward, terminated, truncated, info
             
         # 2. Opponent (P2) moves
@@ -209,9 +220,19 @@ class SelfPlayWrapper(gym.Wrapper):
                         reward += bonus
                     else: # winner == 2
                         reward -= bonus
+                        self.p2_total_reward += bonus
                 elif winner == 0:
                     reward += cfg.env.draw_penalty
+                    self.p2_total_reward += cfg.env.draw_penalty
+                
+                # Inject extra stats for parallel trainer
+                info['win_condition'] = win_condition
+                info['opponent_idx'] = self.opponent_idx
+                info['p2_total_reward'] = self.p2_total_reward
                 
                 break
+            
+            # Accumulate P2 reward
+            self.p2_total_reward += p2_reward
                 
         return obs, reward, terminated, truncated, info
